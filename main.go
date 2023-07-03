@@ -7,14 +7,17 @@ import (
 )
 
 type TrManagerItem struct {
-	trID int
+	label int // nome da transação
+	trID  int
 	// Status: 0-> ativa; 1-> concluída; 2-> abortada; 3-> esperando.
 	status int
+	espera []*LockTableItem
 }
 
 type LockTableItem struct {
-	idItem string
-	trID   int
+	idItem  string
+	trLabel int //nome da transação
+	trID    int
 	// Escopo: 0-> objeto; 1-> predicado.
 	escopo int
 	// Duração: 0-> curta; 1-> longa.
@@ -33,15 +36,18 @@ type Tupla struct {
 	p2 int
 }
 
-func op_BT(trManager *[]*TrManagerItem, trID int) {
+func op_BT(trManager *[]*TrManagerItem, label int) {
+
+	trID := len(*trManager) //timestamp
 
 	transacao := TrManagerItem{
+		label:  label, //nome da transação
 		trID:   trID,
 		status: 0,
 	}
 
 	*trManager = append(*trManager, &transacao)
-	str := strconv.Itoa(trID)
+	str := strconv.Itoa(label)
 	saida = saida + "BT(" + str + ") "
 }
 
@@ -56,8 +62,8 @@ func op_rl(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]
 
 			}
 
-			fmt.Println(fmt.Sprintf("|| === Transação %d - Obtém bloqueio de Leitura sobre o item %s", operacao.trID, operacao.idItem))
-			str := strconv.Itoa(operacao.trID)
+			fmt.Println(fmt.Sprintf("|| === Transação %d (ts: %d)- Obtém bloqueio de Leitura sobre o item %s", operacao.trLabel, operacao.trID, operacao.idItem))
+			str := strconv.Itoa(operacao.trLabel)
 			saida = saida + "R" + str + "(" + operacao.idItem + ") "
 			*lockTable = append(*lockTable, operacao)
 
@@ -85,8 +91,8 @@ func op_wl(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]
 
 			}
 
-			fmt.Println(fmt.Sprintf("|| === Transação %d - Obtém bloqueio de Escrita sobre o item %s", operacao.trID, operacao.idItem))
-			str := strconv.Itoa(operacao.trID)
+			fmt.Println(fmt.Sprintf("|| === Transação %d - Obtém bloqueio de Escrita sobre o item %s", operacao.trLabel, operacao.idItem))
+			str := strconv.Itoa(operacao.trLabel)
 			saida = saida + "W" + str + "(" + operacao.idItem + ") "
 			*lockTable = append(*lockTable, operacao)
 
@@ -96,6 +102,8 @@ func op_wl(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]
 
 			return -1
 
+		} else if transacao.trID == operacao.trID && transacao.status == 1 {
+			//perguntar
 		}
 	}
 
@@ -113,8 +121,6 @@ func op_ul(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]
 
 				*lockTable = append((*lockTable)[:idx_bloqueio], (*lockTable)[idx_bloqueio+1:]...)
 
-				escalonarWaitFor(trManager, lockTable, waitFor, grafoEspera, bloqueio.idItem)
-
 				var tipo_bloqueio string
 				if bloqueio.tipo == 1 {
 					tipo_bloqueio = "Escrita"
@@ -122,7 +128,9 @@ func op_ul(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]
 					tipo_bloqueio = "Leitura"
 				}
 
-				fmt.Println(fmt.Sprintf("|| === Transação %d - Libera bloqueio de %s sobre o item %s", trID, tipo_bloqueio, idItem))
+				fmt.Println(fmt.Sprintf("|| === Transação %d - Libera bloqueio de %s sobre o item %s", bloqueio.trLabel, tipo_bloqueio, idItem))
+
+				escalonarWaitFor(trManager, lockTable, waitFor, grafoEspera, bloqueio.idItem)
 			}
 
 		} else {
@@ -145,7 +153,7 @@ func op_ul(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]
 	}
 }
 
-func op_C(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]*WaitForItem, grafoEspera *[]Tupla, trID int) {
+func op_C(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]*WaitForItem, grafoEspera *[]Tupla, trID int, trLabel int) {
 
 	for _, transacao := range *trManager {
 		if transacao.trID == trID {
@@ -153,7 +161,7 @@ func op_C(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, waitFor *[]*
 		}
 	}
 
-	str := strconv.Itoa(trID)
+	str := strconv.Itoa(trLabel)
 	saida = saida + "C(" + str + ") "
 
 	op_ul(trManager, lockTable, waitFor, grafoEspera, trID, "")
@@ -173,8 +181,8 @@ func op_wait(trManager *[]*TrManagerItem, grafoEspera *[]Tupla, waitFor *[]*Wait
 		}
 
 		fmt.Println(fmt.Sprintf("|| === Transação %d - É abortada devido à estratégia Wait-Die (Transação %d possui o bloqueio sobre o item %s)", operacao.trID, transacao_detentora, operacao.idItem))
-		str := strconv.Itoa(operacao.trID)
-		saida = saida + " Abort" + str +" "
+		str := strconv.Itoa(operacao.trLabel)
+		saida = saida + " Abort" + str + " "
 		return tupla_padrao
 	}
 
@@ -243,23 +251,71 @@ func escalonarWaitFor(trManager *[]*TrManagerItem, lockTable *[]*LockTableItem, 
 			for _, transacao := range *trManager {
 				if transacao.trID == operacao.trID {
 					transacao.status = 0
-				}
-			}
 
-			if operacao.tipo == 1 {
-				// fmt.Println(fmt.Sprintf("Transação %d - Solicita bloqueio de Escrita sobre o item %s", trID, idItem))
-				res_op_wl := op_wl(trManager, lockTable, waitFor, grafoEspera, operacao)
+					if operacao.tipo == 1 {
+						// fmt.Println(fmt.Sprintf("Transação %d - Solicita bloqueio de Escrita sobre o item %s", trID, idItem))
+						res_op_wl := op_wl(trManager, lockTable, waitFor, grafoEspera, operacao)
+						if res_op_wl != -1 {
+							op_wait(trManager, grafoEspera, waitFor, operacao, res_op_wl)
+						} else {
+							for idblock, block := range transacao.espera {
+								if block.tipo == 1 && transacao.status == 0 {
+									res_op_wl := op_wl(trManager, lockTable, waitFor, grafoEspera, block)
+									if res_op_wl != -1 {
+										op_wait(trManager, grafoEspera, waitFor, block, res_op_wl)
+										break
+									}
 
-				if res_op_wl != -1 {
-					op_wait(trManager, grafoEspera, waitFor, operacao, res_op_wl)
-				}
+									//removendo da lista de espera da transação
+									if len(transacao.espera) == 1 {
+										transacao.espera = (transacao.espera)[:0]
+									} else if id_item == len(transacao.espera)-1 {
+										transacao.espera = (transacao.espera)[:len(transacao.espera)-1]
+									} else {
+										transacao.espera = append((transacao.espera)[:idblock], (transacao.espera)[idblock+1:]...)
+									}
 
-			} else {
-				// fmt.Println(fmt.Sprintf("Transação %d - Solicita bloqueio de Escrita sobre o item %s", trID, idItem))
-				res_op_rl := op_rl(trManager, lockTable, waitFor, grafoEspera, operacao)
+								} else if block.tipo == 0 && transacao.status == 0 {
+									res_op_rl := op_rl(trManager, lockTable, waitFor, grafoEspera, block)
+									if res_op_rl != -1 {
+										op_wait(trManager, grafoEspera, waitFor, block, res_op_rl)
+										break
+									}
 
-				if res_op_rl != -1 {
-					op_wait(trManager, grafoEspera, waitFor, operacao, res_op_rl)
+									//removendo da lista de espera da transação
+									if len(transacao.espera) == 1 {
+										transacao.espera = (transacao.espera)[:0]
+									} else if id_item == len(transacao.espera)-1 {
+										transacao.espera = (transacao.espera)[:len(transacao.espera)-1]
+									} else {
+										transacao.espera = append((transacao.espera)[:idblock], (transacao.espera)[idblock+1:]...)
+									}
+								}
+							}
+						}
+
+					} else if operacao.tipo == 0 {
+						// fmt.Println(fmt.Sprintf("Transação %d - Solicita bloqueio de Escrita sobre o item %s", trID, idItem))
+						res_op_rl := op_rl(trManager, lockTable, waitFor, grafoEspera, operacao)
+
+						if res_op_rl != -1 {
+							op_wait(trManager, grafoEspera, waitFor, operacao, res_op_rl)
+						} else {
+							for _, block := range transacao.espera {
+								if block.tipo == 1 && transacao.status == 0 {
+									res_op_wl := op_wl(trManager, lockTable, waitFor, grafoEspera, block)
+									if res_op_wl != -1 {
+										op_wait(trManager, grafoEspera, waitFor, block, res_op_wl)
+									}
+								} else if block.tipo == 0 && transacao.status == 0 {
+									res_op_rl := op_rl(trManager, lockTable, waitFor, grafoEspera, block)
+									if res_op_rl != -1 {
+										op_wait(trManager, grafoEspera, waitFor, block, res_op_rl)
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -289,9 +345,9 @@ func statusParaString(valorNumericoDoStatus int) string {
 func printarTrManager(trManager []*TrManagerItem) {
 	fmt.Println("|| === PRINTANDO TABELA TR MANAGER")
 	fmt.Println(devolverTextoColorido("|| ===============================", "\033[31m"))
-	fmt.Println(devolverTextoColorido("||       ID            STATUS     ", "\033[31m"))
+	fmt.Println(devolverTextoColorido("||      LABEL          TS         STATUS     ", "\033[31m"))
 	for _, item := range trManager {
-		linha := "||       " + strconv.Itoa((*item).trID) + "             " + statusParaString((*item).status) + "    "
+		linha := "||      " + strconv.Itoa((*item).label) + "              " + strconv.Itoa((*item).trID) + "        " + statusParaString((*item).status)
 		fmt.Println(devolverTextoColorido(linha, "\033[31m"))
 	}
 	fmt.Println(devolverTextoColorido("|| ===============================", "\033[31m"))
@@ -300,9 +356,9 @@ func printarTrManager(trManager []*TrManagerItem) {
 func printLockTable(lockTable []*LockTableItem) {
 	fmt.Println("|| === PRINTANDO TABELA LOCK TABLE")
 	fmt.Println(devolverTextoColorido("|| ===============================", "\033[31m"))
-	fmt.Println(devolverTextoColorido("|| ITEM   ID    ESCO   DURA  TIP0 ", "\033[31m"))
+	fmt.Println(devolverTextoColorido("|| ITEM   LABEL    TS    ESCO   DURA  TIP0 ", "\033[31m"))
 	for _, item := range lockTable {
-		linha := "|| " + (*item).idItem + "      " + strconv.Itoa((*item).trID) + "      " + strconv.Itoa((*item).escopo) + "     " + strconv.Itoa((*item).duracao) + "     " + strconv.Itoa((*item).tipo)
+		linha := "|| " + (*item).idItem + "         " + strconv.Itoa((*item).trLabel) + "      " + strconv.Itoa((*item).trID) + "      " + strconv.Itoa((*item).escopo) + "     " + strconv.Itoa((*item).duracao) + "     " + strconv.Itoa((*item).tipo)
 		fmt.Println(devolverTextoColorido(linha, "\033[31m"))
 	}
 	fmt.Println(devolverTextoColorido("|| ===============================", "\033[31m"))
@@ -388,29 +444,31 @@ func main() {
 	for _, operacao := range partes {
 
 		if string(operacao[0]) == "B" {
-			trID, _ := strconv.Atoi(string(operacao[len(operacao)-1]))
+			label, _ := strconv.Atoi(string(operacao[len(operacao)-1]))
 
-			fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Começa", "\033[33m"), trID))
-			op_BT(&trManager, trID)
+			fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Começa", "\033[33m"), label))
+			op_BT(&trManager, label)
 
 			fmt.Println()
 
 		} else if string(operacao[0]) == "W" {
-			trID, _ := strconv.Atoi(string(operacao[1]))
+			trLabel, _ := strconv.Atoi(string(operacao[1]))
 			idItem := string(operacao[len(operacao)-1])
 
 			for _, transacao := range trManager {
 
-				if transacao.trID == trID && transacao.status != 2 {
+				if transacao.label == trLabel && transacao.status == 0 {
+					trID := transacao.trID //timestamp da transação
 					operacao := LockTableItem{
 						idItem:  idItem,
+						trLabel: trLabel,
 						trID:    trID,
 						escopo:  0,
 						duracao: duracao_escrita,
 						tipo:    1,
 					}
 
-					fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Solicita bloqueio de Escrita sobre o item %s", "\033[33m"), trID, idItem))
+					fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Solicita bloqueio de Escrita sobre o item %s", "\033[33m"), transacao.label, idItem))
 					res_op_wl := op_wl(&trManager, &lockTable, &waitFor, &grafoEspera, &operacao)
 
 					if res_op_wl != -1 {
@@ -418,26 +476,38 @@ func main() {
 					}
 
 					fmt.Println()
+				} else if transacao.label == trLabel && transacao.status == 3 {
+					trID := transacao.trID //timestamp da transação
+					operacao := LockTableItem{
+						idItem:  idItem,
+						trLabel: trLabel,
+						trID:    trID,
+						escopo:  0,
+						duracao: duracao_escrita,
+						tipo:    0,
+					}
+					transacao.espera = append(transacao.espera, &operacao)
 				}
 			}
 
 		} else if string(operacao[0]) == "R" {
-			trID, _ := strconv.Atoi(string(operacao[1]))
+			trLabel, _ := strconv.Atoi(string(operacao[1]))
 			idItem := string(operacao[len(operacao)-1])
 
 			for _, transacao := range trManager {
 
-				if transacao.trID == trID && transacao.status != 2 {
-
+				if transacao.label == trLabel && transacao.status == 0 {
+					trID := transacao.trID //timestamp da transação
 					operacao := LockTableItem{
 						idItem:  idItem,
+						trLabel: trLabel,
 						trID:    trID,
 						escopo:  0,
 						duracao: duracao_leitura,
 						tipo:    0,
 					}
 
-					fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Solicita bloqueio de Leitura sobre o item %s", "\033[33m"), trID, idItem))
+					fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Solicita bloqueio de Leitura sobre o item %s", "\033[33m"), trLabel, idItem))
 					res_op_rl := op_rl(&trManager, &lockTable, &waitFor, &grafoEspera, &operacao)
 
 					if res_op_rl != -1 {
@@ -445,20 +515,44 @@ func main() {
 					}
 
 					fmt.Println()
+				} else if transacao.label == trLabel && transacao.status == 3 {
+					trID := transacao.trID //timestamp da transação
+					operacao := LockTableItem{
+						idItem:  idItem,
+						trLabel: trLabel,
+						trID:    trID,
+						escopo:  0,
+						duracao: duracao_leitura,
+						tipo:    0,
+					}
+					transacao.espera = append(transacao.espera, &operacao)
+					fmt.Println("leitura pulada")
+					fmt.Println(transacao.espera)
 				}
 			}
 
 		} else if string(operacao[0]) == "C" {
-			trID, _ := strconv.Atoi(string(operacao[len(operacao)-1]))
+			label, _ := strconv.Atoi(string(operacao[len(operacao)-1]))
 
 			for _, transacao := range trManager {
 
-				if transacao.trID == trID && transacao.status != 2 {
+				if transacao.label == label && transacao.status == 0 {
 
-					fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Solicita Commit", "\033[33m"), trID))
-					op_C(&trManager, &lockTable, &waitFor, &grafoEspera, trID)
+					fmt.Println(fmt.Sprintf(devolverTextoColorido("|| === Transação %d - Solicita Commit", "\033[33m"), label))
+					op_C(&trManager, &lockTable, &waitFor, &grafoEspera, transacao.trID, label)
 
 					fmt.Println()
+				} else if transacao.label == label && transacao.status == 3 {
+
+					operacao := LockTableItem{
+						idItem:  "",
+						trLabel: label,
+						trID:    transacao.trID,
+						escopo:  -1,
+						duracao: -1,
+						tipo:    -1,
+					}
+					transacao.espera = append(transacao.espera, &operacao)
 				}
 			}
 
